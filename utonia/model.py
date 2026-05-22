@@ -40,6 +40,7 @@ except ImportError:
 
 from .structure import Point
 from .module import PointSequential, PointModule
+from .structure import normalize_sparse_conv_dtype
 from .utils import offset2bincount
 
 MODELS = [
@@ -553,6 +554,8 @@ class GridPooling(PointModule):
             )
         if "grid_size" in point.keys():
             point_dict["grid_size"] = point.grid_size * self.stride
+        if "sparse_conv_dtype" in point.keys():
+            point_dict["sparse_conv_dtype"] = point.sparse_conv_dtype
 
         if self.traceable:
             point_dict["pooling_inverse"] = cluster
@@ -680,6 +683,7 @@ class PointTransformerV3(PointModule, PyTorchModelHubMixin):
         shift_coords=None,
         jitter_coords=None,
         rescale_coords=None,
+        sparse_conv_dtype="fp32",
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
@@ -687,6 +691,7 @@ class PointTransformerV3(PointModule, PyTorchModelHubMixin):
         self.enc_mode = enc_mode
         self.shuffle_orders = shuffle_orders
         self.freeze_encoder = freeze_encoder
+        self.sparse_conv_dtype = normalize_sparse_conv_dtype(sparse_conv_dtype)
 
         assert self.num_stages == len(stride) + 1
         assert self.num_stages == len(enc_depths)
@@ -838,6 +843,7 @@ class PointTransformerV3(PointModule, PyTorchModelHubMixin):
 
     def forward(self, data_dict):
         point = Point(data_dict)
+        point["sparse_conv_dtype"] = self.sparse_conv_dtype
         point = self.embedding(point)
 
         point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)

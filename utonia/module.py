@@ -22,11 +22,31 @@ Please cite our work if the code is helpful to you.
 
 
 import sys
+from contextlib import nullcontext
+import torch
 import torch.nn as nn
 import spconv.pytorch as spconv
 from collections import OrderedDict
 
-from .structure import Point
+from .structure import Point, resolve_sparse_conv_torch_dtype
+
+
+def sparse_conv_autocast_context(input, module):
+    if not isinstance(input, Point):
+        return nullcontext()
+    sparse_conv_dtype = input.get("sparse_conv_dtype", None)
+    if sparse_conv_dtype is None:
+        return nullcontext()
+    sparse_tensor = input.get("sparse_conv_feat", None)
+    if sparse_tensor is None or getattr(sparse_tensor, "features", None) is None:
+        return nullcontext()
+    features = sparse_tensor.features
+    if not hasattr(features, "device") or features.device.type != "cuda":
+        return nullcontext()
+    target_dtype = resolve_sparse_conv_torch_dtype(sparse_conv_dtype)
+    if target_dtype == torch.float16:
+        return torch.amp.autocast("cuda", enabled=True, dtype=torch.float16)
+    return torch.amp.autocast("cuda", enabled=False)
 
 
 class PointModule(nn.Module):
@@ -86,11 +106,21 @@ class PointSequential(PointModule):
                 input = module(input)
             # Spconv module
             elif spconv.modules.is_spconv_module(module):
-                if isinstance(input, Point):
-                    input.sparse_conv_feat = module(input.sparse_conv_feat)
-                    input.feat = input.sparse_conv_feat.features
-                else:
-                    input = module(input)
+                with sparse_conv_autocast_context(input, module):
+                    if isinstance(input, Point):
+                        sparse_conv_dtype = input.get("sparse_conv_dtype", None)
+                        if sparse_conv_dtype is not None:
+                            target_dtype = resolve_sparse_conv_torch_dtype(sparse_conv_dtype)
+                            current_features = input.sparse_conv_feat.features
+                            if current_features.dtype != target_dtype:
+                                input.sparse_conv_feat = input.sparse_conv_feat.replace_feature(
+                                    current_features.to(target_dtype)
+                                )
+                                input.feat = input.sparse_conv_feat.features
+                        input.sparse_conv_feat = module(input.sparse_conv_feat)
+                        input.feat = input.sparse_conv_feat.features
+                    else:
+                        input = module(input)
             # PyTorch module
             else:
                 if isinstance(input, Point):

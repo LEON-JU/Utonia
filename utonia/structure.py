@@ -28,6 +28,31 @@ from .serialization import encode
 from .utils import offset2batch, batch2offset
 
 
+_SPARSE_CONV_DTYPE_MAP = {
+    "fp16": "float16",
+    "float16": "float16",
+    "half": "float16",
+    "fp32": "float32",
+    "float32": "float32",
+    "float": "float32",
+}
+
+
+def normalize_sparse_conv_dtype(dtype):
+    value = str(dtype or "fp32").strip().lower()
+    if value not in _SPARSE_CONV_DTYPE_MAP:
+        supported = ", ".join(sorted(set(_SPARSE_CONV_DTYPE_MAP.values())))
+        raise ValueError(f"Unsupported sparse_conv_dtype={dtype!r}. Expected one of: {supported}")
+    return _SPARSE_CONV_DTYPE_MAP[value]
+
+
+def resolve_sparse_conv_torch_dtype(dtype):
+    normalized = normalize_sparse_conv_dtype(dtype)
+    if normalized == "float16":
+        return torch.float16
+    return torch.float32
+
+
 class Point(Dict):
     """
     Point Structure of Pointcept
@@ -147,8 +172,12 @@ class Point(Dict):
             sparse_shape = torch.add(
                 torch.max(self.grid_coord, dim=0).values, pad
             ).tolist()
+        sparse_conv_dtype = self.get("sparse_conv_dtype", None)
+        sparse_feat = self.feat
+        if sparse_conv_dtype is not None:
+            sparse_feat = sparse_feat.to(resolve_sparse_conv_torch_dtype(sparse_conv_dtype))
         sparse_conv_feat = spconv.SparseConvTensor(
-            features=self.feat,
+            features=sparse_feat,
             indices=torch.cat(
                 [self.batch.unsqueeze(-1).int(), self.grid_coord.int()], dim=1
             ).contiguous(),
